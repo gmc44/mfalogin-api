@@ -4,6 +4,10 @@ tiny api (python flask) usefull with [gmc44/keycloak-mfalogin-authenticator](htt
 uncomment ENV line in Dockerfile :
 
 `ENV https_proxy http://your.proxy.url:3128`
+
+### Git Clone
+`git clone https://github.com/gmc44/mfalogin-api.git`
+
 ### Install Docker, Docker-Compose
     dnf update
     export https_proxy="http://your.proxy.url:3128"
