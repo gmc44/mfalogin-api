@@ -1,5 +1,7 @@
 import ldap3
 import re
+import os
+import pickle
 from sms_api import SmsApi
 
 #----------- definitions -----------
@@ -246,3 +248,28 @@ def envoisms(numero,code,uid):
     else:
         log.warning(f"erreur d'envoi au numero {numero}")
         return(".. erreur d'envoi du SMS")
+
+def getviaproxy(url):
+    proto=url.split(':')[0]
+    proxy_host='proxy.ac-nantes.fr:3128'
+    if proto[:4] == 'http': #valide pour http ou https
+        import urllib3
+        proxy = urllib3.ProxyManager(f'http://{proxy_host}/')
+        rep = proxy.request('GET', url)
+        res = rep.data.decode('utf-8')
+    elif proto == 'ftp':
+        import urllib.request
+        req=urllib.request.Request(url)
+        req.set_proxy(proxy_host, 'http')
+        res=urllib.request.urlopen(req).read().decode('utf-8')
+    else:
+        res='protocole invalide http,https,ftp'
+    return(res)
+
+def checkdir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+#Utilisation de base pickle
+def DBL(fic):		return pickle.load(open(fic, "rb")) #DB Load
+def DBS(fic,dic):	return pickle.dump(dic, open(fic, "wb")) #DB Save

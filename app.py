@@ -1,10 +1,17 @@
+from asyncore import read
 from crypt import methods
-from flask import Flask, request, abort
+import ipaddress
+from flask import Flask, request, abort, Response
+import logging.config
 from flasgger import Swagger
 from functions import *
 
 app = Flask(__name__)
 swagger = Swagger(app)
+
+logging_conf_path = os.path.normpath(os.path.join(os.path.dirname(__file__), 'logging.conf'))
+logging.config.fileConfig(logging_conf_path)
+log = logging.getLogger(__name__)
 
 #----------------------------------------------------------------------------------------------------
 # 1 : sendnotif
@@ -338,6 +345,252 @@ def sendotp():
         res=f'connexion impossible {", ".join(msgerreur)}'
         print(f'{uid} - {res}')
     return(txthtml(res))
+
+#----------------------------------------------------------------------------------------------------
+# 5 : checkip
+#----------------------------------------------------------------------------------------------------
+@app.route('/checkip',methods=['POST'])
+def checkip():
+    """check ip address
+    ---
+    parameters:
+      - name: body
+        in: body
+        type: string
+        required: true
+        schema:
+          id : checkip
+          required:
+            - ip
+          properties:
+            ip:
+              type: string
+              description: IP Address
+    responses:
+      200:
+        description: OK
+      401:
+        description: KO
+    """
+    json_data = request.json
+    if 'ip' not in json_data:
+        return('ERREUR : parametres manquants')
+
+    ip = json_data['ip']
+    
+    blacklist=['1.2.3.4','4.6.7.8']
+
+    if ip in blacklist:
+      return Response(response="Unauthorized", status=401)
+    else:
+      return('OK')
+#----------------------------------------------------------------------------------------------------
+# 6 : checkuseragent
+#----------------------------------------------------------------------------------------------------
+@app.route('/checkuseragent',methods=['POST'])
+def checkuseragent():
+    """check user agent
+    ---
+    parameters:
+      - name: body
+        in: body
+        type: string
+        required: true
+        schema:
+          id : checkuseragent
+          required:
+            - user-agent
+          properties:
+            user-agent:
+              type: string
+              description: Browser User Agent
+    responses:
+      200:
+        description: OK
+      401:
+        description: KO
+    """
+    json_data = request.json
+    if 'user-agent' not in json_data:
+        return('ERREUR : parametres manquants')
+
+    useragent = json_data['user-agent']
+    
+    blacklist=['torbrowser','MSIE']
+
+    for bl in blacklist:
+      if bl in useragent:
+        return Response(response="Unauthorized", status=401)
+
+    return('OK')
+
+#----------------------------------------------------------------------------------------------------
+# 6 : checkuseragent
+#----------------------------------------------------------------------------------------------------
+def nbip2cidr(nbip): #convert nb ip to cidr
+  import math
+  return(32-int(math.log(int(nbip),2)))
+
+class geoipfrance():
+  def get(self):
+    """geoipfrance : renvoie la liste json des reseaux france a partir de ripe.net"""		
+    ripedburl='ftp://ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-extended-latest'
+    ripedb=getviaproxy(ripedburl).splitlines()
+    france=[]
+    #rfc1918
+    france.append({'net':'10.0.0.0','cidr':8})
+    france.append({'net':'172.16.0.0','cidr':12})
+    france.append({'net':'192.168.0.0','cidr':16})
+    for l in ripedb:
+      tl=l.split('|')
+      country=tl[1]
+      if country == 'FR':
+        iptype=tl[2]
+        if iptype == 'ipv4':
+          net=tl[3]
+          cidr=nbip2cidr(tl[4])
+          france.append({'net':net,'cidr':cidr})
+    return(france)
+
+# ip france en memoire
+def initcache():
+  global franceSubnets
+  listip=set()
+  for net in geoipfrance().get():
+    ipnet=ipaddress.ip_network(f'{net["net"]}/{net["cidr"]}',False)
+    listip.add(ipnet)
+  franceSubnets=list(listip)
+
+checkdir('tmp')
+ipfrance_cache_file="tmp/ipfrance.db"
+try:
+  franceSubnets=DBL(ipfrance_cache_file)
+except:
+    #initialisation puis sauvegarde
+    franceSubnets={}
+    initcache()
+    DBS(ipfrance_cache_file,franceSubnets)
+
+def noMfaNeeded(reason=''):
+  log.info('noMfaNeeded : '+reason)
+  return "No Mfa Needed"
+def mfaNeeded(reason=''):
+  log.info('mfaNeeded : '+reason)
+  return Response(response="Mfa Needed", status=401)
+
+#test
+franceSubnets = [ipaddress.ip_network('1.2.3.0/24'),ipaddress.ip_network('3.4.2.0/24')]
+
+def IpIsSecure(ip):
+  global franceSubnets
+  try:
+    ipaddr = ipaddress.ip_address(ip)
+    for net in franceSubnets:
+      if ipaddr in net:
+        return True
+  except:
+    log.error(f"impossible d'evaluer l'ip : {ip}")
+  return False
+
+def IsAnOtpConnection(authtype):
+  #cleartrust authtype = 8 or 9 means rsa otp connection
+  if authtype in ('8','9'):
+    return True
+  return False
+
+def IsABadUserAgent(useragent):
+  #user-agent
+  uablacklist=['torbrowser','MSIE']
+  for useragentstring in uablacklist:
+    if useragentstring in useragent:
+      return True
+  return False
+
+def IsInWorkHours():
+  """from monday to friday, from 7AM to 7PM"""
+  from datetime import datetime, time, date
+  start = time(7, 0, 0)
+  end = time(19, 0, 0)
+  current = datetime.now().time()
+  return start <= current <= end and 0 <= date.today().weekday() <= 4
+
+@app.route('/smartcheckmfaneeded',methods=['POST'])
+def smartcheckmfaneeded():
+    """smart check if mfa needed
+    ---
+    parameters:
+      - name: body
+        in: body
+        type: string
+        required: true
+        schema:
+          id : smartcheck
+          required:
+            - useragent
+            - ip
+            - authtype
+          properties:
+            useragent:
+              type: string
+              description: Browser User Agent
+            ip:
+              type: string
+              description: User IP Address
+            authtype:
+              type: string
+              description: Cleartrust CT-AUTH-TYPE
+    responses:
+      200:
+        description: MFA needed
+      401:
+        description: no MFA needed
+    """
+    json_data = request.json
+
+    if 'useragent' not in json_data or 'ip' not in json_data or 'authtype' not in json_data:
+        return('ERREUR : parametres manquants')
+
+    #ip
+
+
+    useragent = json_data['useragent']
+    ip =        json_data['ip']
+    authtype =  json_data['authtype']
+
+
+    log.info(f'Call : {json_data}')
+
+    # Si User Agent in BlackList => MFA
+    if IsABadUserAgent(useragent):
+      return mfaNeeded('Bad user agent')
+    
+    # Sinon si connexion Otp => pas de MFA
+    elif IsAnOtpConnection(authtype):
+      return noMfaNeeded('Otp connection')
+    
+    # Sinon si ip secure et heures de travail
+    elif IpIsSecure(ip) and IsInWorkHours():
+      return noMfaNeeded('ip is secude and workhours')
+
+    # Sinon MFA
+    else:
+      return mfaNeeded('else')
+
+@app.route('/reloadfrancesubnets')
+def reloadCheckIP():
+    """reloadfrancesubnets
+    ---
+    responses:
+      200:
+        description: OK
+      401:
+        description: KO
+    """
+    global franceSubnets
+    franceSubnets={}
+    initcache()
+    DBS(ipfrance_cache_file,franceSubnets)
+    return("liste rechargee")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", debug=True)
