@@ -2,7 +2,7 @@ from asyncore import read
 from crypt import methods
 import ipaddress
 from flask import Flask, request, abort, Response
-import logging.config
+import logging
 from flasgger import Swagger
 from functions import *
 
@@ -10,9 +10,10 @@ app = Flask(__name__)
 swagger = Swagger(app)
 
 logging_conf_path = os.path.normpath(os.path.join(os.path.dirname(__file__), 'logging.conf'))
-logging.config.fileConfig(logging_conf_path)
+log_file_handler = logging.FileHandler(logging_conf_path)
 log = logging.getLogger(__name__)
-
+log.setLevel(level=logging.DEBUG)
+log.addHandler(log_file_handler)
 #----------------------------------------------------------------------------------------------------
 # 1 : sendnotif
 #----------------------------------------------------------------------------------------------------
@@ -570,7 +571,7 @@ def smartcheckmfaneeded():
     
     # Sinon si ip secure et heures de travail
     elif IpIsSecure(ip) and IsInWorkHours():
-      return noMfaNeeded('ip is secude and workhours')
+      return noMfaNeeded('ip is secure and workhours')
 
     # Sinon MFA
     else:
